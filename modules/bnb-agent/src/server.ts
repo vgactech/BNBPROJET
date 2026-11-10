@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { audit } from './auditor.ts';
 import { isAddress } from 'viem';
 import { AuditStore } from './store.ts';
-import { createTestnetRewardSender, validateReward, type RewardSender } from './rewards.ts';
+import { createTestnetRewardSender, validateReward, type RewardSender, type RewardReceiptReader, createTestnetReceiptReader } from './rewards.ts';
 
 const BODY_LIMIT = 220 * 1024;
 const REWARD_WEI = 100_000_000_000_000n;
@@ -38,11 +38,12 @@ function authorized(req: IncomingMessage, token?: string): boolean {
 function allowedFrameOrigins(): string[] {
   const origins = new Set(['https://artcbx-feature-flight.lovable.app']);
   for (const item of (process.env.LVX_ORIGIN ?? '').split(',')) {
-    try { const url = new URL(item.trim()); if (url.protocol === 'https:' && !url.username && !url.password && url.origin === item.trim()) origins.add(url.origin); } catch { /* Ignore invalid origins. */ }
+    try { const url = new URL(item.trim()); const loopback = url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      if ((url.protocol === 'https:' || loopback) && !url.username && !url.password && url.origin === item.trim()) origins.add(url.origin); } catch { /* Ignore invalid origins. */ }
   }
   return [...origins];
 }
-export function createApp(options: { dataDir: string; adminToken?: string; rewardSender?: RewardSender }): Server {
+export function createApp(options: { dataDir: string; adminToken?: string; rewardSender?: RewardSender; receiptReader?: RewardReceiptReader }): Server {
   mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
   const store = new AuditStore(join(options.dataDir, 'audits.sqlite'));
   const page = readFileSync(new URL('../web/index.html', import.meta.url));
@@ -80,7 +81,7 @@ export function createApp(options: { dataDir: string; adminToken?: string; rewar
         catch (error) { throw new HttpError(error instanceof RangeError ? 413 : 400, error instanceof RangeError ? 'Code limité à 200 Kio.' : 'Code source invalide ou vide.'); }
         json(res, 200, store.save(report)); return;
       }
-      const match = url.pathname.match(/^\/api\/audits\/(audit_[a-f\d]{20})\/(review|reward)$/);
+      const match = url.pathname.match(/^\/api\/audits\/(audit_[a-f\d]{20})\/(review|reward|reconcile)$/);
       if (!match) throw new HttpError(404, 'Route introuvable.');
       if (!authorized(req, options.adminToken)) throw new HttpError(401, 'Authentification administrateur requise.');
       const id = match[1]!;
@@ -98,9 +99,23 @@ export function createApp(options: { dataDir: string; adminToken?: string; rewar
         catch { throw new HttpError(409, 'Mission verrouillée après une tentative de versement.'); }
         return;
       }
+      if (match[2] === 'reconcile') {
+        if (!options.receiptReader) throw new HttpError(503, 'Vérification de reçu non configurée.');
+        if (existing.rewardState !== 'submitted' || !existing.transactionHash || !existing.recipient || !existing.rewardAmountWei || !/^\d{1,32}$/.test(existing.rewardAmountWei)) throw new HttpError(409, 'Seule une transaction soumise avec un hash, un bénéficiaire et un montant enregistrés peut être vérifiée.');
+        try {
+          const receipt = await options.receiptReader.inspectReceipt({ transactionHash: existing.transactionHash, recipient: existing.recipient, amountWei: BigInt(existing.rewardAmountWei), expectedSender: process.env.BNB_TREASURY_ADDRESS });
+          if (receipt.transactionHash.toLowerCase() !== existing.transactionHash.toLowerCase() || !['pending', 'success', 'reverted'].includes(receipt.status)) throw new Error('invalid receipt');
+          if (receipt.status !== 'pending') {
+            if (typeof receipt.blockNumber !== 'string' || !/^\d+$/.test(receipt.blockNumber)) throw new Error('invalid block');
+            store.recordReceipt(id, existing.transactionHash, receipt.status === 'success' ? 'paid' : 'reverted', receipt.blockNumber);
+          }
+          json(res, receipt.status === 'pending' ? 202 : 200, store.get(id));
+        } catch { throw new HttpError(502, 'Reçu non vérifiable. Aucun état de paiement modifié.'); }
+        return;
+      }
       if (!options.rewardSender) throw new HttpError(503, 'Wallet testnet non configuré.');
       if (!recipient) throw new HttpError(400, 'Adresse bénéficiaire requise.');
-      if (!store.reserveReward(id, recipient)) throw new HttpError(409, 'Récompense non approuvée, bénéficiaire différent ou versement déjà engagé.');
+      if (!store.reserveReward(id, recipient, REWARD_WEI)) throw new HttpError(409, 'Récompense non approuvée, bénéficiaire différent ou versement déjà engagé.');
       try {
         const sent = await options.rewardSender.pay({ auditId: id, recipient, amountWei: REWARD_WEI });
         if (!/^0x[a-f\d]{64}$/i.test(sent.transactionHash)) throw new Error('invalid hash');
@@ -123,7 +138,7 @@ export function createApp(options: { dataDir: string; adminToken?: string; rewar
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   let rewardSender: RewardSender | undefined;
   if (process.env.BNB_TREASURY_PRIVATE_KEY) rewardSender = createTestnetRewardSender();
-  const server = createApp({ dataDir: process.env.BNB_DATA_DIR ?? './data', adminToken: process.env.BNB_ADMIN_TOKEN, rewardSender });
+  const server = createApp({ dataDir: process.env.BNB_DATA_DIR ?? './data', adminToken: process.env.BNB_ADMIN_TOKEN, rewardSender, receiptReader: createTestnetReceiptReader() });
   const port = Number(process.env.PORT ?? 3000);
   server.listen(port, process.env.HOST ?? '127.0.0.1', () => console.log(`LVX Terminator: http://localhost:${port} (BSC Testnet uniquement)`));
 }

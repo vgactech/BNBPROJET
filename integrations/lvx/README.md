@@ -23,5 +23,6 @@ Le code BNB appartient à ce dépôt ; le code LVX appartient à son dépôt pri
 | `GET /api/audits` | Historique expurgé et dédupliqué |
 | `POST /api/audits/:id/review` | Revue humaine, jeton admin obligatoire |
 | `POST /api/audits/:id/reward` | Récompense testnet après revue, jeton admin obligatoire |
+| `POST /api/audits/:id/reconcile` | Vérification du reçu en lecture seule, jeton admin obligatoire |
 
 Le module n'autorise pas les requêtes CORS depuis n'importe quelle origine. L'iframe utilise l'API sur sa propre origine. Le contexte local conserve un historique commun ; prévoir une identité utilisateur et un contrôle de propriété des missions avant une ouverture publique.

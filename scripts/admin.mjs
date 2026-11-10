@@ -1,8 +1,8 @@
 // Run with `doppler run -- ...`. Never pass secret tokens on the command line.
 const [action, id, ...flags] = process.argv.slice(2);
 const option = name => { const i = flags.indexOf(name); return i < 0 ? undefined : flags[i + 1]; };
-if (!['review', 'reward'].includes(action) || !/^audit_[a-f\d]{20}$/.test(id ?? '')) {
-  console.error('Usage: node scripts/admin.mjs review|reward AUDIT_ID [--approve|--reject] [--recipient 0x...] [--send-testnet]');
+if (!['review', 'reward', 'reconcile'].includes(action) || !/^audit_[a-f\d]{20}$/.test(id ?? '')) {
+  console.error('Usage: node scripts/admin.mjs review|reward|reconcile AUDIT_ID [--approve|--reject] [--recipient 0x...] [--send-testnet]');
   process.exit(1);
 }
 if (!process.env.BNB_ADMIN_TOKEN) throw new Error('BNB_ADMIN_TOKEN required through Doppler.');
@@ -17,4 +17,4 @@ const response = await fetch(new URL(`/api/audits/${id}/${action}`, endpoint), {
 });
 const result = await response.json();
 if (!response.ok) { console.error(result.error ?? 'Operation refused.'); process.exit(1); }
-console.log(JSON.stringify({ id: result.id, reviewApproved: result.reviewApproved, rewardState: result.rewardState, transactionHash: result.transactionHash }, null, 2));
+console.log(JSON.stringify({ id: result.id, reviewApproved: result.reviewApproved, rewardState: result.rewardState, transactionHash: result.transactionHash, receiptBlockNumber: result.receiptBlockNumber }, null, 2));

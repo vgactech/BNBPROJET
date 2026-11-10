@@ -46,3 +46,25 @@ test('bounds report size when a source contains many risky statements', () => {
   assert.equal(report.findings.length, 100);
   assert.match(report.summary, /100 premiers/);
 });
+
+
+test('SQL descriptions and escaped template placeholders do not create false rewards', () => {
+  const report = audit({ source: [
+    'const example = "db.query(`SELECT * FROM users WHERE id = ${id}`)";',
+    'db.query(`SELECT * FROM users WHERE value = \\${literal}`);',
+    "import { exec } from 'node:child_process';",
+    'exec(`echo \\${literal}`);',
+    "db.query('SELECT * FROM users WHERE id = ?', [id]);"
+  ].join('\n') });
+  assert.equal(report.findings.length, 0);
+  assert.equal(report.rewardEligible, false);
+});
+
+test('adversarial repeated imports and same-line findings remain bounded', () => {
+  const report = audit({ source: 'import{'.repeat(20_000) });
+  assert.equal(report.findings.length, 0);
+  const repeated = audit({ source: 'eval(input);'.repeat(15_000) });
+  assert.equal(repeated.findings.length, 1);
+  const malformed = audit({ source: "import { exec } from 'node:child_process';\n" + 'exec('.repeat(10_000) });
+  assert.equal(malformed.findings.length, 1);
+});

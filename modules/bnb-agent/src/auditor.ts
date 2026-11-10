@@ -61,7 +61,9 @@ function firstArgument(source: string, start: number): string {
   let depth = 0;
   let quote = '';
   let escaped = false;
-  for (let i = start; i < source.length; i++) {
+  // Bound work for malformed nested calls; an incomplete argument remains suspect.
+  const end = Math.min(source.length, start + 4096);
+  for (let i = start; i < end; i++) {
     const c = source[i]!;
     if (quote) {
       if (escaped) { escaped = false; continue; }
@@ -74,9 +76,16 @@ function firstArgument(source: string, start: number): string {
     if (c === ')' && depth === 0 || c === ',' && depth === 0) return source.slice(start, i).trim();
     if (c === ')' || c === ']' || c === '}') depth--;
   }
-  return source.slice(start).trim();
+  return source.slice(start, end).trim();
 }
-const staticLiteral = (s: string): boolean => /^"(?:\\.|[^"\\])*"$/.test(s) || /^'(?:\\.|[^'\\])*'$/.test(s) || (/^`(?:\\.|[^`\\])*`$/.test(s) && !s.includes('${'));
+function hasInterpolation(value: string): boolean {
+  for (let i = 0; i < value.length - 1; i++) {
+    if (value[i] === '\\') { i++; continue; }
+    if (value[i] === '$' && value[i + 1] === '{') return true;
+  }
+  return false;
+}
+const staticLiteral = (s: string): boolean => /^"(?:\\.|[^"\\])*"$/.test(s) || /^'(?:\\.|[^'\\])*'$/.test(s) || (/^`(?:\\.|[^`\\])*`$/.test(s) && !hasInterpolation(s));
 
 /** Local heuristic review only: never executes source or contacts a target. */
 export function audit(input: { source: string; filename?: string }): AuditReport {
@@ -87,12 +96,19 @@ export function audit(input: { source: string; filename?: string }): AuditReport
   const text = mask(source);
   const code = mask(source, true);
   const reportId = `audit_${hash(source)}`;
+  const lineStarts = [0];
+  for (let i = 0; i < source.length; i++) if (source[i] === '\n') lineStarts.push(i + 1);
+  const lineAt = (offset: number): number => {
+    let lo = 0, hi = lineStarts.length;
+    while (lo + 1 < hi) { const mid = (lo + hi) >>> 1; if (lineStarts[mid]! <= offset) lo = mid; else hi = mid; }
+    return lo + 1;
+  };
   const findings: Finding[] = [];
   const seen = new Set<string>();
   let truncated = false;
   const add = (rule: string, title: string, severity: Severity, offset: number, recommendation: string): void => {
     if (findings.length >= 100) { truncated = true; return; }
-    const line = source.slice(0, offset).split('\n').length;
+    const line = lineAt(offset);
     const key = `${rule}:${line}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -112,7 +128,7 @@ export function audit(input: { source: string; filename?: string }): AuditReport
   }
   const execNames = new Set<string>();
   const namespaces = new Set<string>();
-  for (const m of text.matchAll(/(?:import\s*\{([^}]+)\}\s*from|(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\s*\()\s*['"](?:node:)?child_process['"]/g)) {
+  for (const m of text.matchAll(/(?:import\s*\{([^{}]{1,1000})\}\s*from|(?:const|let|var)\s*\{([^{}]{1,1000})\}\s*=\s*require\s*\()\s*['"](?:node:)?child_process['"]/g)) {
     for (const binding of (m[1] ?? m[2] ?? '').split(',')) {
       const parsed = binding.trim().match(/^(execSync|exec)(?:\s+(?:as)\s+|\s*:\s*)?(\w+)?$/);
       if (parsed) execNames.add(parsed[2] ?? parsed[1]!);
@@ -126,12 +142,13 @@ export function audit(input: { source: string; filename?: string }): AuditReport
     if (argument && !staticLiteral(argument)) add('shell-command', 'Commande shell construite dynamiquement', 'high', m.index!, 'Préférer execFile/spawn sans shell, des arguments séparés et une liste de commandes autorisées.');
   }
   for (const m of code.matchAll(/\.\s*(innerHTML|outerHTML)\s*=(?!=)/g)) {
-    const rest = text.slice(m.index! + m[0].length).split(/;|\n/)[0]!.trim();
+    const start = m.index! + m[0].length;
+    const rest = text.slice(start, start + 4096).split(/;|\n/, 1)[0]!.trim();
     if (staticLiteral(rest) && !/<script|\bon\w+\s*=|javascript:/i.test(rest)) continue;
     add('html-injection', 'Insertion HTML à contrôler', 'medium', m.index!, 'Utiliser textContent pour du texte ou une bibliothèque de nettoyage HTML éprouvée avant insertion.');
   }
   for (const m of text.matchAll(/\b(?:query|execute)\s*\(\s*(`[^`]*`|"(?:\\.|[^"\\])*"\s*\+|\x27(?:\\.|[^\x27\\])*\x27\s*\+)/g)) {
-    if (!/\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b/i.test(m[1]!) || !(m[1]!.includes('${') || /\+\s*$/.test(m[1]!))) continue;
+    if (!/\b(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b/i.test(m[1]!) || !(hasInterpolation(m[1]!) || /\+\s*$/.test(m[1]!))) continue;
     if (!/\b(?:query|execute)\s*\(/.test(code.slice(m.index!, m.index! + 30))) continue;
     add('sql-interpolation', 'Requête SQL interpolée', 'high', m.index!, 'Utiliser les paramètres du pilote SQL ($1, ? ou paramètres nommés), sans interpolation du texte fourni.');
   }

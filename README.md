@@ -46,6 +46,8 @@ Administration (jeton fourni uniquement par Doppler) :
 doppler run --project lvx --config bnb -- node scripts/admin.mjs review AUDIT_ID --approve --recipient 0x...
 # Après validation, avec une trésorerie testnet dédiée configurée :
 doppler run --project lvx --config bnb -- node scripts/admin.mjs reward AUDIT_ID --recipient 0x... --send-testnet
+# Lecture seule : vérifier le reçu et enregistrer paid/reverted, sans renvoyer :
+doppler run --project lvx --config bnb -- node scripts/admin.mjs reconcile AUDIT_ID
 ```
 
 Variables à fournir via Doppler pour activer ce parcours : `BNB_ADMIN_TOKEN`, `BNB_TREASURY_PRIVATE_KEY`, éventuellement `BNB_RPC_URL`. La clé de trésorerie n'est pas configurée dans la démonstration. Ne pas réutiliser une clé ou des fonds LVX. `.env.example` décrit les paramètres sans valeur secrète.

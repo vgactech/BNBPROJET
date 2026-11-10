@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRewardSender, createTestnetRewardSender, MAX_REWARD_WEI, RewardBroadcastUncertainError, validateReward } from '../src/rewards.ts';
+import { createRewardReceiptReader, createRewardSender, createTestnetReceiptReader, createTestnetRewardSender, MAX_REWARD_WEI, RewardBroadcastUncertainError, validateReward } from '../src/rewards.ts';
+import type { RewardReceiptTransport } from '../src/rewards.ts';
 
 const recipient = '0x0000000000000000000000000000000000000001';
 const transactionHash = `0x${'ab'.repeat(32)}`;
@@ -49,4 +50,66 @@ test('invalid configuration errors never echo private key input', () => {
   const secret = 'secret-not-a-private-key';
   assert.throws(() => createTestnetRewardSender({ privateKey: secret }), error => error instanceof Error && !error.message.includes(secret));
   assert.throws(() => createTestnetRewardSender({ privateKey: `0x${'01'.repeat(32)}`, rpcUrl: 'http://example.com' }), /HTTPS/);
+});
+
+const treasury = '0x0000000000000000000000000000000000000002';
+const receiptRequest = { transactionHash, recipient, amountWei: 100n, expectedSender: treasury };
+
+function receiptTransport(overrides: Partial<RewardReceiptTransport> = {}): RewardReceiptTransport {
+  return {
+    getChainId: async () => 97,
+    getTransactionReceipt: async () => ({ transactionHash, status: 'success', blockNumber: 123n }),
+    getTransaction: async () => ({ hash: transactionHash, from: treasury, to: recipient, value: 100n }),
+    ...overrides,
+  };
+}
+
+test('receipt reader verifies a successful exact testnet payment without a signing key', async () => {
+  const reader = createRewardReceiptReader(receiptTransport());
+  assert.deepEqual(await reader.inspectReceipt(receiptRequest), { status: 'success', transactionHash, blockNumber: '123' });
+  assert.ok(createTestnetReceiptReader({ rpcUrl: 'https://example.com' }));
+});
+
+test('missing receipt is pending and never needs transaction lookup', async () => {
+  const reader = createRewardReceiptReader(receiptTransport({
+    getTransactionReceipt: async () => null,
+    getTransaction: async () => { throw new Error('must not be called'); },
+  }));
+  assert.deepEqual(await reader.inspectReceipt(receiptRequest), { status: 'pending', transactionHash, blockNumber: null });
+});
+
+test('reverted receipt cannot be reported as a successful payment', async () => {
+  const reader = createRewardReceiptReader(receiptTransport({
+    getTransactionReceipt: async () => ({ transactionHash, status: 'reverted', blockNumber: 124n }),
+  }));
+  assert.equal((await reader.inspectReceipt(receiptRequest)).status, 'reverted');
+});
+
+test('receipt reader refuses other chains before reading receipts', async () => {
+  let calls = 0;
+  const reader = createRewardReceiptReader(receiptTransport({
+    getChainId: async () => 56,
+    getTransactionReceipt: async () => { calls++; return null; },
+  }));
+  await assert.rejects(reader.inspectReceipt(receiptRequest), /chain 97/);
+  assert.equal(calls, 0);
+});
+
+test('receipt verification rejects different hashes, recipients, amounts, and senders', async () => {
+  const otherHash = `0x${'cd'.repeat(32)}`;
+  const cases: Partial<RewardReceiptTransport>[] = [
+    { getTransactionReceipt: async () => ({ transactionHash: otherHash, status: 'success', blockNumber: 1n }) },
+    { getTransaction: async () => ({ hash: otherHash, from: treasury, to: recipient, value: 100n }) },
+    { getTransaction: async () => ({ hash: transactionHash, from: treasury, to: treasury, value: 100n }) },
+    { getTransaction: async () => ({ hash: transactionHash, from: treasury, to: recipient, value: 101n }) },
+    { getTransaction: async () => ({ hash: transactionHash, from: recipient, to: recipient, value: 100n }) },
+  ];
+  for (const mismatch of cases) {
+    await assert.rejects(createRewardReceiptReader(receiptTransport(mismatch)).inspectReceipt(receiptRequest), /does not match/);
+  }
+});
+
+test('read-only RPC failures do not expose provider credentials', async () => {
+  const reader = createRewardReceiptReader(receiptTransport({ getChainId: async () => { throw new Error('https://rpc.example/secret-token'); } }));
+  await assert.rejects(reader.inspectReceipt(receiptRequest), error => error instanceof Error && !error.message.includes('secret-token'));
 });
