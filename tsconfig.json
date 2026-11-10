@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2023","module":"NodeNext","moduleResolution":"NodeNext","strict":true,"allowImportingTsExtensions":true,"noEmit":true,"types":["node"],"lib":["ES2023","DOM"],"skipLibCheck":true},"include":["modules/bnb-agent/src/**/*.ts","modules/bnb-agent/test/**/*.ts"]}

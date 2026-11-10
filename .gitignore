@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.studio/
+**/.studio/
+**/wallets/
+**/keystore*
+data/
+.data/
+*.db*
+*.log
+dist/
+coverage/

@@ -1,0 +1,25 @@
+{
+  "name": "lvx-terminator-bnb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Module BNB autonome pour les missions de sécurité LVX",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --experimental-strip-types modules/bnb-agent/src/server.ts",
+    "dev": "node --watch --experimental-strip-types modules/bnb-agent/src/server.ts",
+    "test": "node --experimental-strip-types --test modules/bnb-agent/test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "studio:sync": "node scripts/studio-sync.mjs"
+  },
+  "dependencies": {
+    "viem": "2.38.5"
+  },
+  "devDependencies": {
+    "@bnbagent/studio-cli": "0.0.16",
+    "@types/node": "24.10.0",
+    "typescript": "5.9.3"
+  }
+}
